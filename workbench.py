@@ -28,6 +28,36 @@ app.secret_key = 'workbench_public_key'
 CSV_DATA_CACHE = {}  # Stores full DataFrame for each file
 CSV_EDITS_CACHE = {}  # Stores edits by page and cell
 
+def sanitize_download_filename(name: str, default_ext: str = '') -> str:
+    """Sanitize filename for downloads: strip any local labels/prefixes and directories."""
+    if not name:
+        return f"workbench_file{default_ext}"
+    # Normalize for case-insensitive replace
+    repl_map = [
+        ('local://', ''),
+        ('localfile://', ''),
+        ('Local file: ', ''),
+        ('local file: ', ''),
+        ('Local:', ''),
+        ('local:', ''),
+    ]
+    # Apply replacements preserving original case by checking lower()
+    lower = name.lower()
+    for pat, repl in repl_map:
+        if pat.lower() in lower:
+            # Replace in a case-insensitive manner by scanning
+            idx = lower.find(pat.lower())
+            if idx != -1:
+                name = name[:idx] + repl + name[idx+len(pat):]
+                lower = name.lower()
+    name = name.strip()
+    # Keep only the basename
+    name = os.path.basename(name)
+    # Avoid empty result
+    if not name:
+        name = f"workbench_file{default_ext}"
+    return name
+
 # Simple dark theme HTML
 HTML_TEMPLATE = r"""
 <!doctype html>
@@ -1044,7 +1074,7 @@ CSV_EDIT_HTML = r"""
                       type="text"
                       id="public_url"
                       name="public_url"
-                      value="{{ public_url if public_url else 'Local file: ' + filename }}"
+                      value="{{ public_url if public_url else '' + filename }}"
                       class="flex-grow border px-4 py-2 text-base theme-transition"
                       style="height: 46px;"
                       placeholder="Enter S3 path or URL"
@@ -1993,26 +2023,45 @@ RAW_EDIT_HTML = r"""
            }
          }
 
-         // Download content function
-         function downloadContent() {
-           let content = '';
-           if (window.monaco && editor) {
-             content = editor.getValue();
-           } else {
-             content = document.getElementById('code_text').value;
-           }
-           
-           // Create blob and download
-           const blob = new Blob([content], { type: 'text/plain' });
-           const url = window.URL.createObjectURL(blob);
-           const a = document.createElement('a');
-           a.href = url;
-           a.download = 'workbench_file.txt';
-           document.body.appendChild(a);
-           a.click();
-           document.body.removeChild(a);
-           window.URL.revokeObjectURL(url);
-         }
+         // Download content function - POST to server to preserve filename
+        function downloadContent() {
+          let content = '';
+          if (window.monaco && editor) {
+            content = editor.getValue();
+          } else {
+            const hidden = document.getElementById('code_text');
+            content = hidden ? hidden.value : '';
+          }
+
+          const filename = '{{ filename }}' || '{{ actual_file_path }}' || 'workbench_file.txt';
+
+          // Build and submit a form to /download_raw
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = '/download_raw';
+
+          const codeField = document.createElement('input');
+          codeField.type = 'hidden';
+          codeField.name = 'code_text';
+          codeField.value = content;
+          form.appendChild(codeField);
+
+          const nameField = document.createElement('input');
+          nameField.type = 'hidden';
+          nameField.name = 'filename';
+          nameField.value = filename;
+          form.appendChild(nameField);
+
+          const pathField = document.createElement('input');
+          pathField.type = 'hidden';
+          pathField.name = 'actual_file_path';
+          pathField.value = '{{ actual_file_path }}';
+          form.appendChild(pathField);
+
+          document.body.appendChild(form);
+          form.submit();
+          document.body.removeChild(form);
+        }
 
          // Show loading overlay for code editor
          function showCodeLoadingOverlay() {
@@ -2782,7 +2831,7 @@ def home():
                     RAW_EDIT_HTML,
                     filename=filename,
                     code_text=content,
-                    actual_file_path=filename,
+                    actual_file_path=url,
                     big_time_display=get_big_time_display()
                 )
             
@@ -2847,7 +2896,7 @@ def home():
                     RAW_EDIT_HTML,
                     filename=filename,
                     code_text=text_content,
-                    actual_file_path=filename,
+                    actual_file_path=f"localfile://{os.path.basename(filename)}",
                     big_time_display=get_big_time_display()
                 )
             
@@ -2876,76 +2925,53 @@ def render_csv_editor_local(content, filename, per_page=20):
         except UnicodeDecodeError:
             flash("File must be text-based (UTF-8)")
             return redirect(url_for("home"))
-        
+
         # Simple CSV parsing (split by lines and commas)
         lines = text_content.strip().split('\n')
         if not lines:
             flash("CSV file is empty")
             return redirect(url_for("home"))
-        
+
         # Parse headers and data
         headers = [h.strip() for h in lines[0].split(',')]
         data = []
         for line in lines[1:]:
             if line.strip():
                 values = [v.strip() for v in line.split(',')]
+                row = {}
+                for i, header in enumerate(headers):
+                    row[header] = values[i] if i < len(values) else ""
+                data.append(row)
+
+        # Build cache entry
+        import time
+        cache_key = f"local_csv_{hash(filename)}_{int(time.time())}"
         CSV_DATA_CACHE[cache_key] = {
-            'data': data.to_dict('records'),
-            'columns': columns,
-            'public_url': public_url,
-            'module': module,
-            'file_type': file_type,
-            'gzipped': gzipped,
+            'data': data,
+            'columns': headers,
+            'public_url': f"localfile://{os.path.basename(filename)}",
+            'module': 'csv',
+            'file_type': 'csv',
+            'gzipped': False,
             'filename': filename,
-            'detected_delimiter': detected_delimiter
+            'detected_delimiter': ',',
+            'per_page': int(request.form.get('csv_per_page', session.get('csv_per_page', per_page)))
         }
-        
-        # Get pagination count from form or session
-        # The form should have the updated value from JavaScript localStorage sync
-        per_page = int(request.form.get('csv_per_page', session.get('csv_per_page', 20)))
-        
-        # Store cache key in session for clean URLs
+
+        # Determine per_page from form or session
+        per_page = int(request.form.get('csv_per_page', session.get('csv_per_page', per_page)))
+
+        # Store cache key in session for clean URLs and for download compatibility
         session['csv_cache_key'] = cache_key
         session['csv_per_page'] = per_page
-        
-        print(f"DEBUG: Home route - csv_per_page from form: {request.form.get('csv_per_page')}")
-        print(f"DEBUG: Home route - final per_page: {per_page}")
-        print(f"DEBUG: Home route - all form data: {dict(request.form)}")
-        
+        session['cache_key'] = cache_key  # for download_csv()
+
+        print(f"DEBUG: Local CSV - rows: {len(data)}, cols: {len(headers)}")
+        print(f"DEBUG: Stored cache_key: {cache_key}")
+        print(f"DEBUG: per_page: {per_page}")
+
         # Redirect to the clean CSV editor URL
         return redirect(url_for('csv_page', page=1))
-    # ... existing code ...
-        total_rows = len(data)
-        page_count = (total_rows + per_page - 1) // per_page  # Ceiling division
-        
-        # Get first page data
-        start = 0
-        end = min(per_page, total_rows)
-        page_data = data[start:end]
-        
-        return render_template_string(
-            CSV_EDIT_HTML,
-            filename=filename,
-            s3_path=f"Local file: {filename}",
-            gzipped=False,
-            cache_key=cache_key,
-            theme="dark",
-            big_time_display=get_big_time_display(),
-            # CSV specific data
-            columns=headers,
-            data=page_data,
-            edits={},
-            edits_json="{}",
-            start_rec=start + 1,
-            end_rec=end,
-            total_rows=total_rows,
-            page=1,
-            page_count=page_count,
-            per_page=per_page,
-            start=start,
-            escaped_delimiter=",",
-            file_type="csv"
-        )
     except Exception as e:
         flash(f"Error rendering CSV editor: {str(e)}")
         return redirect(url_for("home"))
@@ -3046,6 +3072,10 @@ def download_csv():
         
         data = cached_data['data']
         filename = cached_data.get('filename', 'modified_file.csv')
+        # Ensure filename has no local labels and has .csv extension
+        filename = sanitize_download_filename(filename, default_ext='.csv')
+        if not filename.lower().endswith('.csv'):
+            filename = f"{filename}.csv"
         
         # Get edits from session
         edits = session.get(f'csv_edits_{cache_key}', {})
@@ -3096,6 +3126,27 @@ def download_csv():
     except Exception as e:
         print(f"DEBUG: Download CSV error: {str(e)}")
         flash(f"Error downloading CSV: {str(e)}")
+        return redirect(url_for('home'))
+
+@app.route('/download_raw', methods=['POST'])
+def download_raw():
+    """Download the current raw editor content as a file with the provided filename."""
+    try:
+        # Prefer explicit filename from form, else fall back to actual_file_path or generic
+        filename = request.form.get('filename') or request.form.get('actual_file_path') or 'workbench_file.txt'
+        code_text = request.form.get('code_text', '')
+
+        # Sanitize filename and ensure it has an extension (default .txt)
+        filename = sanitize_download_filename(filename)
+        if not os.path.splitext(filename)[1]:
+            filename = f"{filename}.txt"
+
+        from flask import Response
+        response = Response(code_text, mimetype='text/plain; charset=utf-8')
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        flash(f"Error downloading file: {str(e)}")
         return redirect(url_for('home'))
 
 @app.route('/save_raw', methods=['POST'])
@@ -3450,8 +3501,13 @@ def raw_editor_route():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9000"))
-    try:
-        webbrowser.open(f"http://localhost:{port}")
-    except Exception:
-        pass
-    app.run(debug=True, port=port, use_reloader=True)
+    debug = os.environ.get("FLASK_ENV", "development") == "development"
+    
+    # Only open browser in local development
+    if debug and port != int(os.environ.get("PORT", "9000")):
+        try:
+            webbrowser.open(f"http://localhost:{port}")
+        except Exception:
+            pass
+    
+    app.run(debug=debug, host="0.0.0.0", port=port, use_reloader=debug)
