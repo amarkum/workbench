@@ -63,12 +63,25 @@ HTML_TEMPLATE = r"""
 <!doctype html>
 <html>
 <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f1f5f9">
     <title>WorkBench</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        /* iOS safe-area & fullscreen helpers */
+        html { height: -webkit-fill-available; }
+        body { min-height: 100vh; min-height: -webkit-fill-available; padding-top: env(safe-area-inset-top); }
+        @supports (padding: max(0px)) {
+          body { padding-top: max(env(safe-area-inset-top), 0px); }
+        }
         * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important; box-sizing: border-box; }
         body, html { margin: 0; padding: 0; background-color: #0f172a !important; color: #e2e8f0 !important; }
         .main-container { background-color: #1e293b !important; color: #e2e8f0 !important; border-radius: 0; }
@@ -96,6 +109,10 @@ HTML_TEMPLATE = r"""
         .big-day-date { font-size: 0.875rem !important; font-weight: 500 !important; color: #94a3b8 !important; line-height: 1.2 !important; }
         .big-time-display { display: flex; flex-direction: row; justify-content: flex-end; align-items: center; margin-bottom: 0.5rem; }
         .time-section { text-align: right; height: 46px !important; display: flex !important; flex-direction: column !important; justify-content: center !important; align-items: flex-end !important; }
+        /* Hide in-app time when the screen shrinks (narrow width or short height) */
+        @media (max-width: 640px), (max-height: 520px), (orientation: landscape) and (max-height: 430px) {
+          .big-time-display { display: none !important; }
+        }
         
         /* Ensure buttons are visible and properly styled */
         .btn { display: inline-flex !important; visibility: visible !important; opacity: 1 !important; }
@@ -814,8 +831,15 @@ HTML_TEMPLATE = r"""
 CSV_EDIT_HTML = r"""
 <!doctype html>
 <html>
-   <head>
-      <title>WorkBench</title>
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f1f5f9">
+    <title>WorkBench</title>
       <script src="https://cdn.tailwindcss.com"></script>
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -824,6 +848,16 @@ CSV_EDIT_HTML = r"""
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fira-code@5.0.18/400.css">
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/cascadia-code@5.0.7/400.css">
       <style>
+         /* iOS safe-area & fullscreen helpers */
+         html { height: -webkit-fill-available; }
+         body { min-height: 100vh; min-height: -webkit-fill-available; padding-top: env(safe-area-inset-top); }
+         @supports (padding: max(0px)) {
+           body { padding-top: max(env(safe-area-inset-top), 0px); }
+         }
+         /* Hide in-app time on small iPhone screens */
+         @media (max-width: 480px) {
+           .big-time-display { display: none !important; }
+         }
          /* ==================== BASE STYLES ==================== */
          * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important; }
          body, html, input, textarea, select, button, div, span, label, p, h1, h2, h3, h4, h5, h6, option, td, th { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important; }
@@ -1777,6 +1811,12 @@ RAW_EDIT_HTML = r"""
 <html>
    <head>
       <title>WorkBench</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+      <meta name="apple-mobile-web-app-capable" content="yes">
+      <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+      <meta name="mobile-web-app-capable" content="yes">
+      <meta name="theme-color" content="#1e293b" media="(prefers-color-scheme: dark)">
+      <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
       <!-- Immediate background before any content loads -->
       <script>
          // Apply theme immediately before any content loads
@@ -1872,7 +1912,11 @@ RAW_EDIT_HTML = r"""
          .pink-theme .witty-message { color: #db2777 !important; }
          /* Big Time Display Styling */
          .big-time-display { display: flex; flex-direction: row; justify-content: flex-end; align-items: center; margin-bottom: 0.5rem; }
-         .time-section { text-align: right; height: 46px !important; display: flex !important; flex-direction: column !important; justify-content: center !important; align-items: flex-end !important; } }
+         .time-section { text-align: right; height: 46px !important; display: flex !important; flex-direction: column !important; justify-content: center !important; align-items: flex-end !important; }
+         /* Hide in-app time when the screen shrinks (narrow width or short height) */
+         @media (max-width: 640px), (max-height: 520px), (orientation: landscape) and (max-height: 430px) {
+           .big-time-display { display: none !important; }
+         }
          .big-time { font-size: 1.5rem !important; font-weight: 700 !important; line-height: 1.2 !important; color: #e2e8f0 !important; margin-bottom: 0.125rem !important; }
          .big-day-date { font-size: 0.875rem !important; font-weight: 500 !important; color: #94a3b8 !important; line-height: 1.2 !important; }
          .dark-theme .big-greeting { color: #94a3b8 !important; }
