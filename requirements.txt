@@ -3,3 +3,4 @@ pandas==2.0.3
 numpy==1.24.3
 requests==2.31.0
 gunicorn==21.2.0
+boto3==1.28.57

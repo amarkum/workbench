@@ -28,6 +28,38 @@ app.secret_key = 'workbench_public_key'
 CSV_DATA_CACHE = {}  # Stores full DataFrame for each file
 CSV_EDITS_CACHE = {}  # Stores edits by page and cell
 
+
+def sanitize_download_filename(name: str, default_ext: str = '') -> str:
+    """Sanitize filename for downloads: strip any local labels/prefixes and directories."""
+    if not name:
+        return f"workbench_file{default_ext}"
+    # Normalize for case-insensitive replace
+    repl_map = [
+        ('local://', ''),
+        ('localfile://', ''),
+        ('Local file: ', ''),
+        ('local file: ', ''),
+        ('Local:', ''),
+        ('local:', ''),
+    ]
+    # Apply replacements preserving original case by checking lower()
+    lower = name.lower()
+    for pat, repl in repl_map:
+        if pat.lower() in lower:
+            # Replace in a case-insensitive manner by scanning
+            idx = lower.find(pat.lower())
+            if idx != -1:
+                name = name[:idx] + repl + name[idx + len(pat):]
+                lower = name.lower()
+    name = name.strip()
+    # Keep only the basename
+    name = os.path.basename(name)
+    # Avoid empty result
+    if not name:
+        name = f"workbench_file{default_ext}"
+    return name
+
+
 # Simple dark theme HTML
 HTML_TEMPLATE = r"""
 <!doctype html>
@@ -66,22 +98,22 @@ HTML_TEMPLATE = r"""
         .big-day-date { font-size: 0.875rem !important; font-weight: 500 !important; color: #94a3b8 !important; line-height: 1.2 !important; }
         .big-time-display { display: flex; flex-direction: row; justify-content: flex-end; align-items: center; margin-bottom: 0.5rem; }
         .time-section { text-align: right; height: 46px !important; display: flex !important; flex-direction: column !important; justify-content: center !important; align-items: flex-end !important; }
-        
+
         /* Ensure buttons are visible and properly styled */
         .btn { display: inline-flex !important; visibility: visible !important; opacity: 1 !important; }
         .btn-success { background-color: #10b981 !important; color: white !important; border: none !important; }
         .btn-primary { background-color: #6366f1 !important; color: white !important; border: none !important; }
         .btn-secondary { background-color: #64748b !important; color: white !important; border: none !important; }
         .btn-ghost { background-color: transparent !important; color: #64748b !important; border: 1px solid #e2e8f0 !important; }
-        
+
         /* Input styling */
         input[type="text"], select, textarea { border-radius: 0; border: 1px solid #e2e8f0; padding: 0.625rem 1rem; font-size: 0.875rem; transition: all 0.2s ease; background-color: #334155 !important; color: #e2e8f0 !important; border-color: #475569 !important; }
         input[type="text"]:focus, select:focus, textarea:focus { outline: none; border-color: #475569 !important; box-shadow: none !important; }
         input#url_input { font-weight: 400 !important; }
-        
+
         /* Section card styling */
         .section-card { border-radius: 0; padding: 1.5rem; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06); background-color: #1e293b; border: 1px solid #334155; }
-        
+
         /* ==================== WHITE THEME ==================== */
         body.white-theme { background-color: #f1f5f9 !important; color: #1e293b !important; }
         .white-theme .main-container { background-color: #f8fafc !important; color: #1e293b !important; border-radius: 0; }
@@ -139,7 +171,7 @@ HTML_TEMPLATE = r"""
         .white-theme .json-comma { color: #000000 !important; }
         .white-theme .json-toggle { color: #808080 !important; cursor: pointer; }
         .white-theme .json-toggle:hover { color: #000000 !important; }
-        
+
         /* ==================== DARK THEME (Default) ==================== */
         body.dark-theme { background-color: #0f172a !important; color: #e2e8f0 !important; }
         .dark-theme .main-container { background-color: #1e293b !important; color: #e2e8f0 !important; border-radius: 0; }
@@ -189,7 +221,7 @@ HTML_TEMPLATE = r"""
                 </select>
             </div>
         </div>
-        
+
         <!-- Main form -->
         <form action="{{ url_for('home') }}" method="post" enctype="multipart/form-data" class="space-y-4" id="main-form" onsubmit="updatePaginationBeforeSubmit()">
             <!-- Row 1: URL Input -->
@@ -204,7 +236,7 @@ HTML_TEMPLATE = r"""
                        placeholder="Enter public URL (http:// or https://)" 
                        value="{{ last_url }}" style="height: 46px;" autocomplete="off" />
             </div>
-            
+
             <!-- Row 2: Local File -->
             <div class="flex items-center space-x-2">
                 <!-- Local browse button -->
@@ -218,7 +250,7 @@ HTML_TEMPLATE = r"""
                 <input type="text" id="local_path" class="flex-grow border px-4 py-2 text-base theme-transition" 
                        placeholder="No file selected" readonly style="height: 46px;" />
             </div>
-            
+
             <!-- Hidden fields -->
             <input type="hidden" name="path" id="path_input" value="" />
             <input type="hidden" name="download_count" id="limit_input" value="All" />
@@ -226,7 +258,7 @@ HTML_TEMPLATE = r"""
             <input type="hidden" name="records_per_page" id="records_per_page_input" value="20" />
             <input type="hidden" name="orig_url" id="orig_url" value="" />
             <input type="hidden" name="raw_edit" id="raw_edit_input" value="" />
-            
+
             <!-- Row 3: Action buttons -->
             <div class="flex items-center justify-between">
                 <!-- Left side: Terminal -->
@@ -244,7 +276,7 @@ HTML_TEMPLATE = r"""
                 </div>
             </div>
         </form>
-        
+
         <!-- Terminal Section -->
         <div id="terminal-section" class="mt-8 section-card" style="display: none;">
             <div class="flex items-center justify-between mb-4">
@@ -258,7 +290,7 @@ HTML_TEMPLATE = r"""
                     <input type="text" id="home-terminal-input" class="terminal-input" style="flex: 1; border: none; font-weight: normal; font-family: 'Monaco', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Liberation Mono', 'Courier New', monospace !important; font-size: 15px !important; outline: none; padding: 15px; padding-left: 5px; box-shadow: none; border-radius: 0; text-align: left; -webkit-tap-highlight-color: transparent; -webkit-appearance: none; -moz-appearance: none; appearance: none;" />           </div>
             </div>
         </div>
-        
+
         <!-- Notes Section (Default) -->
         <div id="notes-section" class="mt-8 section-card">
             <div class="flex items-center justify-between mb-4">
@@ -269,7 +301,7 @@ HTML_TEMPLATE = r"""
                 <textarea id="notesTextarea" class="notes-textarea" style="flex: 1; width: 100%; height: 100%; font-family: 'Monaco', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Liberation Mono', 'Courier New', monospace !important; padding: 20px; overflow-y: auto; white-space: pre-wrap; font-size: 15px; line-height: 1.6; margin: 0; border-radius: 0; border: none; outline: none; resize: none;" onload="if(typeof initializeNotes === 'function') initializeNotes();"></textarea>
             </div>
         </div>
-        
+
 
     </div>
 
@@ -278,13 +310,13 @@ HTML_TEMPLATE = r"""
         const browseBtn = document.getElementById('browseBtn');
         const uploadFile = document.getElementById('upload_file');
         const localPath = document.getElementById('local_path');
-        
+
         if (browseBtn && uploadFile) {
             browseBtn.addEventListener('click', function() {
                 uploadFile.click();
             });
         }
-        
+
         if (uploadFile && localPath) {
             uploadFile.addEventListener('change', function() {
                 const file = this.files[0];
@@ -293,7 +325,7 @@ HTML_TEMPLATE = r"""
                 }
             });
         }
-        
+
         // Theme switching function (copied from workbench.py)
         function setTheme(theme) {
             // Apply theme immediately without transition
@@ -320,7 +352,7 @@ HTML_TEMPLATE = r"""
                     console.error('Error saving theme:', error);
                 });
         }
-        
+
         // Get theme from server and localStorage, prioritize localStorage for persistence
         const serverTheme = 'dark'; // Default theme
         const savedTheme = localStorage.getItem('workbench-theme');
@@ -344,7 +376,7 @@ HTML_TEMPLATE = r"""
             document.documentElement.className = activeTheme + '-theme';
             document.body.className = 'min-h-screen ' + activeTheme + '-theme';
         });
-        
+
         // Notes persistence
         const notesTextarea = document.getElementById('notesTextarea');
         if (notesTextarea) {
@@ -352,16 +384,16 @@ HTML_TEMPLATE = r"""
             if (savedNotes) {
                 notesTextarea.value = savedNotes;
             }
-            
+
             notesTextarea.addEventListener('input', function() {
                 localStorage.setItem('workbench-notes', this.value);
             });
         }
-        
+
         // Pagination and URL persistence
         const recordsPerPage = document.getElementById('recordsPerPage');
         const urlInput = document.getElementById('url_input');
-        
+
         // Load saved settings from session
         function loadSavedSettings() {
             fetch('/get-settings', { method: 'GET' })
@@ -381,7 +413,7 @@ HTML_TEMPLATE = r"""
                 })
                 .catch(error => console.error('Error loading settings:', error));
         }
-        
+
         // Save settings when pagination changes
         if (recordsPerPage) {
             recordsPerPage.addEventListener('input', function() {
@@ -389,7 +421,7 @@ HTML_TEMPLATE = r"""
                 saveSettings(value, urlInput ? urlInput.value : '');
             });
         }
-        
+
         // Save settings when URL changes
         if (urlInput) {
             urlInput.addEventListener('input', function() {
@@ -397,7 +429,7 @@ HTML_TEMPLATE = r"""
                 saveSettings(paginationValue, this.value);
             });
         }
-        
+
         // Function to save settings to server
         function saveSettings(paginationCount, urlInput) {
             fetch('/save-settings', {
@@ -418,33 +450,33 @@ HTML_TEMPLATE = r"""
             })
             .catch(error => console.error('Error saving settings:', error));
         }
-        
+
         // Load settings when page loads
         loadSavedSettings();
-        
 
-        
+
+
         // Pagination persistence - run immediately on DOM load
         document.addEventListener('DOMContentLoaded', function() {
             const recordsPerPage = document.getElementById('recordsPerPage');
             const recordsPerPageHidden = document.getElementById('records_per_page_hidden');
             const csvPerPageHidden = document.getElementById('csv_per_page_hidden');
-            
+
             console.log('Loading pagination from localStorage...');
-            
+
             // Initialize records per page from localStorage or default to 20
             if (recordsPerPage) {
                 let savedRecordsPerPage = localStorage.getItem('workbench-records-per-page');
                 console.log('Saved pagination count:', savedRecordsPerPage);
-                
+
                 if (!savedRecordsPerPage) {
                     savedRecordsPerPage = '20';
                     localStorage.setItem('workbench-records-per-page', savedRecordsPerPage);
                 }
-                
+
                 // Always set the display value
                 recordsPerPage.textContent = savedRecordsPerPage;
-                
+
                 // Update hidden fields if they exist
                 if (recordsPerPageHidden) {
                     recordsPerPageHidden.value = savedRecordsPerPage;
@@ -452,10 +484,10 @@ HTML_TEMPLATE = r"""
                 if (csvPerPageHidden) {
                     csvPerPageHidden.value = savedRecordsPerPage;
                 }
-                
+
                 console.log('Set pagination display to:', savedRecordsPerPage);
             }
-            
+
             // Add event listeners for the recordsPerPage element
             if (recordsPerPage) {
                 recordsPerPage.addEventListener('blur', function() {
@@ -470,7 +502,7 @@ HTML_TEMPLATE = r"""
                         csvPerPageHidden.value = value;
                     }
                 });
-                
+
                 // Also update on input for real-time sync
                 recordsPerPage.addEventListener('input', function() {
                     const value = this.textContent;
@@ -480,28 +512,28 @@ HTML_TEMPLATE = r"""
                 });
             }
         });
-        
+
         // Function to update pagination before form submission
         window.updatePaginationBeforeSubmit = function() {
             const recordsPerPage = document.getElementById('recordsPerPage');
             const csvPerPageHidden = document.getElementById('csv_per_page_hidden');
-            
+
             if (recordsPerPage && csvPerPageHidden) {
                 const currentValue = recordsPerPage.textContent || '20';
                 csvPerPageHidden.value = currentValue;
                 console.log('Updated csv_per_page_hidden to:', currentValue);
             }
-            
+
             // Also sync with localStorage
             const savedValue = localStorage.getItem('workbench-records-per-page') || '20';
             if (csvPerPageHidden) {
                 csvPerPageHidden.value = savedValue;
                 console.log('Set csv_per_page_hidden from localStorage:', savedValue);
             }
-            
+
             return true; // Allow form submission to continue
         };
-        
+
         // Function to show edit loader
         window.showEditLoader = function() {
             // Prevent multiple loaders
@@ -553,28 +585,28 @@ HTML_TEMPLATE = r"""
                 progress += 5;
                 document.getElementById('edit-progress-bar').style.width = progress + '%';
                 document.getElementById('edit-progress-text').textContent = progress + '%';
-                
+
                 if (progress >= 100) {
                     clearInterval(interval);
                 }
             }, 100);
         };
-        
+
         // Terminal functionality with proper toggle
         window.createAndShowTerminal = function(showImmediately = true) {
             console.log('createAndShowTerminal called');
-            
+
             var terminalSection = document.getElementById('terminal-section');
             var terminalBtn = document.getElementById('terminalToggleBtn');
-            
+
             console.log('Terminal section found:', !!terminalSection);
             console.log('Terminal button found:', !!terminalBtn);
-            
+
             if (!terminalSection) {
                 console.error('Terminal section not found!');
                 return false;
             }
-            
+
             // Toggle terminal visibility
             if (terminalSection.style.display === 'none' || !terminalSection.style.display) {
                 console.log('Opening terminal...');
@@ -583,7 +615,7 @@ HTML_TEMPLATE = r"""
                 if (terminalBtn) {
                     terminalBtn.classList.add('selected');
                 }
-                
+
                 // Focus and scroll only if showImmediately is true
                 if (showImmediately) {
                     setTimeout(function() {
@@ -592,7 +624,7 @@ HTML_TEMPLATE = r"""
                         terminalSection.scrollIntoView({behavior: 'smooth'});
                     }, 100);
                 }
-                
+
                 // Save state
                 var openSections = JSON.parse(localStorage.getItem('workbench-open-sections') || '[]');
                 if (!openSections.includes('terminal')) {
@@ -604,10 +636,10 @@ HTML_TEMPLATE = r"""
                 // Close terminal
                 window.closeTerminal();
             }
-            
+
             return false;
         };
-        
+
         window.closeTerminal = function() {
             var terminalSection = document.getElementById('terminal-section');
             var terminalBtn = document.getElementById('terminalToggleBtn');
@@ -616,7 +648,7 @@ HTML_TEMPLATE = r"""
                 if (terminalBtn) {
                     terminalBtn.classList.remove('selected');
                 }
-                
+
                 // Remove from open sections
                 var openSections = JSON.parse(localStorage.getItem('workbench-open-sections') || '[]');
                 var index = openSections.indexOf('terminal');
@@ -626,7 +658,7 @@ HTML_TEMPLATE = r"""
                 }
             }
         };
-        
+
         // Terminal command execution
         const terminalInput = document.getElementById('home-terminal-input');
         if (terminalInput) {
@@ -646,7 +678,7 @@ HTML_TEMPLATE = r"""
         } else {
             console.error('Terminal input element not found!');
         }
-        
+
         window.executeTerminalCommand = function(command) {
             var output = document.getElementById('home-terminal-output');
             if (!output) return;
@@ -724,7 +756,7 @@ HTML_TEMPLATE = r"""
                 output.scrollTop = output.scrollHeight;
             });
         };
-        
+
         // Clear all function
         function clearAll() {
             document.getElementById('url_input').value = '';
@@ -734,7 +766,7 @@ HTML_TEMPLATE = r"""
             localStorage.removeItem('workbench-notes');
             alert('All fields cleared!');
         }
-        
+
         // Notes save to file function
         function saveNotesToFile() {
             const notes = document.getElementById('notesTextarea').value;
@@ -746,21 +778,21 @@ HTML_TEMPLATE = r"""
                 a.click();
             }
         }
-        
+
         // Initialize terminal with welcome message and restore state
         document.addEventListener('DOMContentLoaded', function() {
             console.log('DOM loaded, checking terminal functions...');
             console.log('createAndShowTerminal available:', typeof window.createAndShowTerminal);
             console.log('closeTerminal available:', typeof window.closeTerminal);
-            
-            
+
+
             var output = document.getElementById('home-terminal-output');
             if (output) {
                 const welcomeColor = '#ffffff';
                 const helpColor = '#ffffff';
                 output.innerHTML = 'Welcome to WorkBench Terminal<br>Type some command e.g. pip install pandas<br><br>';
             }
-            
+
             // Restore terminal state
             var openSections = JSON.parse(localStorage.getItem('workbench-open-sections') || '[]');
             if (openSections.includes('terminal')) {
@@ -771,7 +803,7 @@ HTML_TEMPLATE = r"""
                     terminalBtn.classList.add('selected');
                 }
             }
-            
+
             // Test terminal button click
             if (terminalBtn) {
                 console.log('Terminal button found and ready!');
@@ -974,7 +1006,7 @@ CSV_EDIT_HTML = r"""
          // Apply theme immediately without transition
          document.documentElement.className = theme + '-theme';
          document.body.className = 'min-h-screen ' + theme + '-theme';
-         
+
 
          localStorage.setItem('workbench-theme', theme);
 
@@ -998,7 +1030,7 @@ CSV_EDIT_HTML = r"""
          });
          }
 
-         
+
       </script>
       <!-- Add padding container -->
       <div class="w-full min-h-screen main-container theme-transition p-8 csv-edit-page">
@@ -1025,7 +1057,7 @@ CSV_EDIT_HTML = r"""
                   <select id="theme-select" class="border px-4 py-2 text-base theme-transition" style="font-weight: 500 !important; min-width: 120px; height: 46px;" onchange="setTheme(this.value)">
                      <option value="dark">🌃   Dark</option>
                      <option value="white">🔆  White</option>
-   
+
                   </select>
                </div>
             </div>
@@ -1044,7 +1076,7 @@ CSV_EDIT_HTML = r"""
                       type="text"
                       id="public_url"
                       name="public_url"
-                      value="{{ public_url if public_url else 'Local file: ' + filename }}"
+                      value="{{ public_url if public_url else '' + filename }}"
                       class="flex-grow border px-4 py-2 text-base theme-transition"
                       style="height: 46px;"
                       placeholder="Enter S3 path or URL"
@@ -1061,7 +1093,7 @@ CSV_EDIT_HTML = r"""
                      style="height: 46px; width: 10ch;"
                      />
                </div>
-               
+
                <!-- Encryption toggle button removed -->
                                <button
                    type="submit"
@@ -1099,7 +1131,7 @@ CSV_EDIT_HTML = r"""
              <input type="hidden" name="filename" value="{{ filename }}" />
          </form>
 
-         
+
          <!-- Top Controls (Outside Form) -->
          <div class="flex items-center justify-between mb-4 space-x-2">
             <!-- Left: Record count -->
@@ -1220,11 +1252,11 @@ CSV_EDIT_HTML = r"""
             </table>
          </div>
          </form>
-         
+
          <!-- Hidden field for per_page -->
          <input type="hidden" id="per_page_hidden" value="{{ per_page }}" />
-         
-         
+
+
       </div>
       <script>
          // Cache key for this file
@@ -1240,7 +1272,7 @@ CSV_EDIT_HTML = r"""
              per_page: {{ per_page }},
              page_count: {{ page_count }}
          });
-         
+
          // Function to handle pagination count changes (kept for compatibility)
          function updatePaginationCount(newPerPage) {
              // This function is now handled by the form submission
@@ -1342,7 +1374,7 @@ CSV_EDIT_HTML = r"""
              }
            }
          });
-         
+
          // Prevent Enter key from creating newlines
          document.getElementById('tableBody').addEventListener('keypress', function(e) {
            if (e.target.tagName === 'TD' && e.key === 'Enter') {
@@ -1412,7 +1444,7 @@ CSV_EDIT_HTML = r"""
              });
            }
          });
-         
+
          // Update edit count indicator
          function updateEditCount() {
            const count = Object.keys(existingEdits).length;
@@ -1470,7 +1502,7 @@ CSV_EDIT_HTML = r"""
              }, 0);
            }
          }, true);
-         
+
          // Update edit count indicator
          function updateEditCount() {
            const count = Object.keys(existingEdits).length;
@@ -1580,7 +1612,7 @@ CSV_EDIT_HTML = r"""
            function changePage(page) {
              // Save current page edits before changing pages
              saveCurrentPageEdits();
-             
+
              // Show loading indicator
              const recordInfo = document.querySelector('.record-info');
              if (recordInfo) {
@@ -1604,15 +1636,15 @@ CSV_EDIT_HTML = r"""
                if (data.success) {
                  // Update the table with new data
                  updateTableWithData(data.data);
-                 
+
                  // Update pagination info
                  if (recordInfo) {
                    recordInfo.innerHTML = '<span class="font-bold">' + data.start_rec + '</span>&nbsp;–&nbsp;<span class="font-bold">' + data.end_rec + '</span>&nbsp;of&nbsp;<span class="font-bold">' + data.total_rows + '</span>';
                  }
-                 
+
                  // Update current page indicator
                  updatePaginationButtons(page, data.page_count);
-                 
+
                  // Update URL without page reload
                  const url = new URL(window.location);
                  url.searchParams.set('page', page);
@@ -1631,10 +1663,10 @@ CSV_EDIT_HTML = r"""
            function saveCurrentPageEdits() {
              const tbody = document.getElementById('tableBody');
              if (!tbody) return;
-             
+
              const rows = tbody.querySelectorAll('tr');
              const headers = Array.from(document.querySelectorAll('thead th')).map(th => th.textContent.trim());
-             
+
              rows.forEach((tr, rowIndex) => {
                const cells = tr.querySelectorAll('td');
                cells.forEach((cell, colIndex) => {
@@ -1642,13 +1674,13 @@ CSV_EDIT_HTML = r"""
                    const header = headers[colIndex];
                    const originalValue = cell.getAttribute('data-original') || cell.textContent;
                    const currentValue = cell.textContent.trim();
-                   
+
                    if (currentValue !== originalValue) {
                      // Calculate global row index based on current page
                      const currentPage = getCurrentPage();
                      const perPage = {{ per_page }};
                      const globalRowIndex = (currentPage - 1) * perPage + rowIndex;
-                     
+
                      if (!existingEdits[globalRowIndex]) existingEdits[globalRowIndex] = {};
                      existingEdits[globalRowIndex][header] = currentValue;
                    }
@@ -1675,33 +1707,33 @@ CSV_EDIT_HTML = r"""
              data.forEach((row, localRowIndex) => {
                const tr = document.createElement('tr');
                const headers = Array.from(document.querySelectorAll('thead th')).map(th => th.textContent.trim());
-               
+
                headers.forEach((header, colIndex) => {
                  const td = document.createElement('td');
                  td.contentEditable = true;
-                 
+
                  // Get the value, checking for edits first
                  const currentPage = getCurrentPage();
                  const perPage = {{ per_page }};
                  const globalRowIndex = (currentPage - 1) * perPage + localRowIndex;
-                 
+
                  let value = row[header] || '';
-                 
+
                  // Check if there's an edit for this cell
                  if (existingEdits[globalRowIndex] && existingEdits[globalRowIndex][header]) {
                    value = existingEdits[globalRowIndex][header];
                    td.classList.add('edited');
                  }
-                 
+
                  // Store original value for comparison
                  td.setAttribute('data-original', row[header] || '');
                  td.textContent = value;
-                 
+
                  td.addEventListener('blur', function() {
                    // Handle cell editing
                    const currentValue = td.textContent.trim();
                    const originalValue = td.getAttribute('data-original') || '';
-                   
+
                    if (currentValue !== originalValue) {
                      if (!existingEdits[globalRowIndex]) existingEdits[globalRowIndex] = {};
                      existingEdits[globalRowIndex][header] = currentValue;
@@ -1716,7 +1748,7 @@ CSV_EDIT_HTML = r"""
                      }
                    }
                  });
-                 
+
                  tr.appendChild(td);
                });
                tbody.appendChild(tr);
@@ -1884,8 +1916,8 @@ RAW_EDIT_HTML = r"""
          // Set dark theme by default
          document.documentElement.className = 'dark-theme';
          document.body.className = 'min-h-screen dark-theme';
-         
-  
+
+
       </script>
       <div class="w-full min-h-screen main-container theme-transition p-8">
          <!-- Header Section - Simplified -->
@@ -1906,7 +1938,7 @@ RAW_EDIT_HTML = r"""
                </div>
             </div>
          </div>
-         
+
          <!-- File Path Input Section with Controls -->
          <div class="mb-4">
             <div class="flex items-center space-x-2">
@@ -1955,18 +1987,18 @@ RAW_EDIT_HTML = r"""
       <script>
          // Define before any use
          const USE_PLAIN_EDITOR = false;
-         
+
          // Theme switching function
          function changeTheme(theme) {
            if (!theme) return;
-          
+
            // Save theme preference
            localStorage.setItem('workbench-theme', theme);
-          
+
            // Remove existing theme classes
            document.documentElement.classList.remove('dark-theme', 'white-theme');
            document.body.classList.remove('dark-theme', 'white-theme');
-          
+
            // Add the selected theme class
            if (theme === 'white') {
                document.documentElement.classList.add('white-theme');
@@ -1975,14 +2007,14 @@ RAW_EDIT_HTML = r"""
                document.documentElement.classList.add('dark-theme');
                document.body.classList.add('dark-theme');
            }
-           
+
            // Add new theme class
            document.documentElement.classList.add(theme + '-theme');
            document.body.classList.add(theme + '-theme');
-           
+
            // Save to localStorage
            localStorage.setItem('workbench-theme', theme);
-           
+
            // Update Monaco editor theme if available
            if (window.monaco && editor) {
              if (theme === 'white') {
@@ -1993,26 +2025,45 @@ RAW_EDIT_HTML = r"""
            }
          }
 
-         // Download content function
-         function downloadContent() {
-           let content = '';
-           if (window.monaco && editor) {
-             content = editor.getValue();
-           } else {
-             content = document.getElementById('code_text').value;
-           }
-           
-           // Create blob and download
-           const blob = new Blob([content], { type: 'text/plain' });
-           const url = window.URL.createObjectURL(blob);
-           const a = document.createElement('a');
-           a.href = url;
-           a.download = 'workbench_file.txt';
-           document.body.appendChild(a);
-           a.click();
-           document.body.removeChild(a);
-           window.URL.revokeObjectURL(url);
-         }
+         // Download content function - POST to server to preserve filename
+        function downloadContent() {
+          let content = '';
+          if (window.monaco && editor) {
+            content = editor.getValue();
+          } else {
+            const hidden = document.getElementById('code_text');
+            content = hidden ? hidden.value : '';
+          }
+
+          const filename = '{{ filename }}' || '{{ actual_file_path }}' || 'workbench_file.txt';
+
+          // Build and submit a form to /download_raw
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = '/download_raw';
+
+          const codeField = document.createElement('input');
+          codeField.type = 'hidden';
+          codeField.name = 'code_text';
+          codeField.value = content;
+          form.appendChild(codeField);
+
+          const nameField = document.createElement('input');
+          nameField.type = 'hidden';
+          nameField.name = 'filename';
+          nameField.value = filename;
+          form.appendChild(nameField);
+
+          const pathField = document.createElement('input');
+          pathField.type = 'hidden';
+          pathField.name = 'actual_file_path';
+          pathField.value = '{{ actual_file_path }}';
+          form.appendChild(pathField);
+
+          document.body.appendChild(form);
+          form.submit();
+          document.body.removeChild(form);
+        }
 
          // Show loading overlay for code editor
          function showCodeLoadingOverlay() {
@@ -2126,10 +2177,10 @@ RAW_EDIT_HTML = r"""
                localStorage.setItem('workbench-theme', currentTheme);
            }
            if (themeDropdown) themeDropdown.value = currentTheme;
-           
+
            // Apply initial theme
            changeTheme(currentTheme);
-           
+
            // Add event listener for theme changes
            if (themeDropdown) {
                themeDropdown.addEventListener('change', function() {
@@ -2680,12 +2731,14 @@ RAW_EDIT_HTML = r"""
 </html>
 """
 
+
 def get_big_time_display():
     """Get current time and date for display"""
     now = datetime.now()
     time_str = now.strftime("%I:%M %p")  # 11:50 AM format
     date_str = now.strftime("%A, %B %d")
     return {"big_time": time_str, "day_date": date_str}
+
 
 @app.route("/", methods=["GET", "POST"])
 def home():
@@ -2695,21 +2748,21 @@ def home():
             last_url=session.get('last_url', ''),
             big_time_display=get_big_time_display()
         )
-    
+
     # POST handling
     action = request.form.get("action", "")
-    
+
     if action == "download":
         url = request.form.get("url_input", "").strip()
         if not url:
             flash("Please provide a valid URL")
             return redirect(url_for("home"))
-        
+
         try:
             # Download file from URL
             response = requests.get(url, stream=True)
             response.raise_for_status()
-            
+
             # Get filename from URL or content-disposition header
             filename = url.split('/')[-1]
             if not filename or '.' not in filename:
@@ -2722,38 +2775,38 @@ def home():
                     filename = 'downloaded_file.csv'
                 else:
                     filename = 'downloaded_file'
-            
+
             # Save to temporary file and send
             temp_file = tempfile.NamedTemporaryFile(delete=False)
             for chunk in response.iter_content(chunk_size=8192):
                 temp_file.write(chunk)
             temp_file.close()
-            
+
             session['last_url'] = url
             flash(f"File downloaded successfully: {filename}")
-            
+
             return send_file(temp_file.name, as_attachment=True, download_name=filename)
-            
+
         except Exception as e:
             flash(f"Error downloading file: {str(e)}")
             return redirect(url_for("home"))
-    
+
     elif action == "view":
         url = request.form.get("url_input", "").strip()
         if not url:
             flash("Please provide a valid URL")
             return redirect(url_for("home"))
-        
+
         try:
             # Fetch content from URL
             response = requests.get(url)
             response.raise_for_status()
-            
+
             content = response.text
             content_type = response.headers.get('content-type', '')
-            
+
             session['last_url'] = url
-            
+
             # Detect file type from URL or content type
             filename = url.split('/')[-1] or 'url_content'
             if not filename or '.' not in filename:
@@ -2765,13 +2818,13 @@ def home():
                     filename = 'content.txt'
                 else:
                     filename = 'url_content'
-            
+
             # Check if it's a CSV file
             file_extension = filename.lower().split('.')[-1]
             if file_extension == 'gz':
                 # Handle .csv.gz case
                 file_extension = filename.lower().split('.')[-2]
-            
+
             if file_extension in ['csv']:
                 # Use CSV editor for CSV files from URLs
                 per_page = int(request.form.get('csv_per_page', 20))
@@ -2782,56 +2835,56 @@ def home():
                     RAW_EDIT_HTML,
                     filename=filename,
                     code_text=content,
-                    actual_file_path=filename,
+                    actual_file_path=url,
                     big_time_display=get_big_time_display()
                 )
-            
+
         except Exception as e:
             flash(f"Error viewing content: {str(e)}")
             return redirect(url_for("home"))
-    
+
     elif action == "edit":
         # Handle CSV/JSON editing from S3
         s3_path = request.form.get("s3_path", "").strip()
         if not s3_path:
             flash("Please provide a valid S3 path")
             return redirect(url_for("home"))
-        
+
         try:
             # Detect file type from extension
             file_extension = s3_path.lower().split('.')[-1]
             if file_extension == 'gz':
                 # Handle .csv.gz case
                 file_extension = s3_path.lower().split('.')[-2]
-            
+
             if file_extension in ['csv']:
                 # Use CSV editor for CSV files
                 return render_csv_editor(s3_path)
             else:
                 # Use raw editor for other file types
                 return render_raw_editor(s3_path)
-                
+
         except Exception as e:
             flash(f"Error editing file: {str(e)}")
             return redirect(url_for("home"))
-    
+
     elif action == "edit_local":
         upload = request.files.get("upload_file")
         if not upload or not upload.filename:
             flash("Please select a local file")
             return redirect(url_for("home"))
-        
+
         try:
             # Read file content
             content = upload.read()
             filename = upload.filename
-            
+
             # Detect file type from extension
             file_extension = filename.lower().split('.')[-1]
             if file_extension == 'gz':
                 # Handle .csv.gz case
                 file_extension = filename.lower().split('.')[-2]
-            
+
             if file_extension in ['csv']:
                 # Use CSV editor for CSV files
                 per_page = int(request.form.get('csv_per_page', 20))
@@ -2842,20 +2895,21 @@ def home():
                     text_content = content.decode('utf-8')
                 except UnicodeDecodeError:
                     text_content = str(content)
-                
+
                 return render_template_string(
                     RAW_EDIT_HTML,
                     filename=filename,
                     code_text=text_content,
-                    actual_file_path=filename,
+                    actual_file_path=f"localfile://{os.path.basename(filename)}",
                     big_time_display=get_big_time_display()
                 )
-            
+
         except Exception as e:
             flash(f"Error reading file: {str(e)}")
             return redirect(url_for("home"))
-    
+
     return redirect(url_for("home"))
+
 
 def render_csv_editor(s3_path):
     """Render CSV editor for S3 files"""
@@ -2867,6 +2921,7 @@ def render_csv_editor(s3_path):
         flash(f"Error editing file: {str(e)}")
         return redirect(url_for("home"))
 
+
 def render_csv_editor_local(content, filename, per_page=20):
     """Render CSV editor for local files"""
     try:
@@ -2876,89 +2931,13 @@ def render_csv_editor_local(content, filename, per_page=20):
         except UnicodeDecodeError:
             flash("File must be text-based (UTF-8)")
             return redirect(url_for("home"))
-        
+
         # Simple CSV parsing (split by lines and commas)
         lines = text_content.strip().split('\n')
         if not lines:
             flash("CSV file is empty")
             return redirect(url_for("home"))
-        
-        # Parse headers and data
-        headers = [h.strip() for h in lines[0].split(',')]
-        data = []
-        for line in lines[1:]:
-            if line.strip():
-                values = [v.strip() for v in line.split(',')]
-        CSV_DATA_CACHE[cache_key] = {
-            'data': data.to_dict('records'),
-            'columns': columns,
-            'public_url': public_url,
-            'module': module,
-            'file_type': file_type,
-            'gzipped': gzipped,
-            'filename': filename,
-            'detected_delimiter': detected_delimiter
-        }
-        
-        # Get pagination count from form or session
-        # The form should have the updated value from JavaScript localStorage sync
-        per_page = int(request.form.get('csv_per_page', session.get('csv_per_page', 20)))
-        
-        # Store cache key in session for clean URLs
-        session['csv_cache_key'] = cache_key
-        session['csv_per_page'] = per_page
-        
-        print(f"DEBUG: Home route - csv_per_page from form: {request.form.get('csv_per_page')}")
-        print(f"DEBUG: Home route - final per_page: {per_page}")
-        print(f"DEBUG: Home route - all form data: {dict(request.form)}")
-        
-        # Redirect to the clean CSV editor URL
-        return redirect(url_for('csv_page', page=1))
-    # ... existing code ...
-        total_rows = len(data)
-        page_count = (total_rows + per_page - 1) // per_page  # Ceiling division
-        
-        # Get first page data
-        start = 0
-        end = min(per_page, total_rows)
-        page_data = data[start:end]
-        
-        return render_template_string(
-            CSV_EDIT_HTML,
-            filename=filename,
-            s3_path=f"Local file: {filename}",
-            gzipped=False,
-            cache_key=cache_key,
-            theme="dark",
-            big_time_display=get_big_time_display(),
-            # CSV specific data
-            columns=headers,
-            data=page_data,
-            edits={},
-            edits_json="{}",
-            start_rec=start + 1,
-            end_rec=end,
-            total_rows=total_rows,
-            page=1,
-            page_count=page_count,
-            per_page=per_page,
-            start=start,
-            escaped_delimiter=",",
-            file_type="csv"
-        )
-    except Exception as e:
-        flash(f"Error rendering CSV editor: {str(e)}")
-        return redirect(url_for("home"))
 
-def render_csv_editor_from_url(url, content, filename, per_page=20):
-    """Render CSV editor for CSV files from URLs"""
-    try:
-        # Simple CSV parsing (split by lines and commas)
-        lines = content.strip().split('\n')
-        if not lines:
-            flash("CSV file is empty")
-            return redirect(url_for("home"))
-        
         # Parse headers and data
         headers = [h.strip() for h in lines[0].split(',')]
         data = []
@@ -2969,11 +2948,65 @@ def render_csv_editor_from_url(url, content, filename, per_page=20):
                 for i, header in enumerate(headers):
                     row[header] = values[i] if i < len(values) else ""
                 data.append(row)
-        
+
+        # Build cache entry
+        import time
+        cache_key = f"local_csv_{hash(filename)}_{int(time.time())}"
+        CSV_DATA_CACHE[cache_key] = {
+            'data': data,
+            'columns': headers,
+            'public_url': f"localfile://{os.path.basename(filename)}",
+            'module': 'csv',
+            'file_type': 'csv',
+            'gzipped': False,
+            'filename': filename,
+            'detected_delimiter': ',',
+            'per_page': int(request.form.get('csv_per_page', session.get('csv_per_page', per_page)))
+        }
+
+        # Determine per_page from form or session
+        per_page = int(request.form.get('csv_per_page', session.get('csv_per_page', per_page)))
+
+        # Store cache key in session for clean URLs and for download compatibility
+        session['csv_cache_key'] = cache_key
+        session['csv_per_page'] = per_page
+        session['cache_key'] = cache_key  # for download_csv()
+
+        print(f"DEBUG: Local CSV - rows: {len(data)}, cols: {len(headers)}")
+        print(f"DEBUG: Stored cache_key: {cache_key}")
+        print(f"DEBUG: per_page: {per_page}")
+
+        # Redirect to the clean CSV editor URL
+        return redirect(url_for('csv_page', page=1))
+    except Exception as e:
+        flash(f"Error rendering CSV editor: {str(e)}")
+        return redirect(url_for("home"))
+
+
+def render_csv_editor_from_url(url, content, filename, per_page=20):
+    """Render CSV editor for CSV files from URLs"""
+    try:
+        # Simple CSV parsing (split by lines and commas)
+        lines = content.strip().split('\n')
+        if not lines:
+            flash("CSV file is empty")
+            return redirect(url_for("home"))
+
+        # Parse headers and data
+        headers = [h.strip() for h in lines[0].split(',')]
+        data = []
+        for line in lines[1:]:
+            if line.strip():
+                values = [v.strip() for v in line.split(',')]
+                row = {}
+                for i, header in enumerate(headers):
+                    row[header] = values[i] if i < len(values) else ""
+                data.append(row)
+
         # Store data in cache system (same as workbench.py)
         import time
         cache_key = f"url_csv_{hash(filename)}_{int(time.time())}"
-        
+
         # Store full data in cache - keep as list of dicts for template compatibility
         CSV_DATA_CACHE[cache_key] = {
             'data': data,  # Keep as list of dicts, not DataFrame
@@ -2986,21 +3019,22 @@ def render_csv_editor_from_url(url, content, filename, per_page=20):
             'detected_delimiter': ',',
             'per_page': per_page  # Store the pagination count
         }
-        
+
         # Store cache key in session for clean URLs
         session['csv_cache_key'] = cache_key
         session['csv_per_page'] = per_page
-        
+
         # Debug information
         print(f"DEBUG: Stored {len(data)} rows in cache with key: {cache_key}")
         print(f"DEBUG: Cache keys: {list(CSV_DATA_CACHE.keys())}")
         print(f"DEBUG: Data format: {type(data)}, first row: {data[0] if data else 'None'}")
-        
+
         # Redirect to clean CSV editor URL
         return redirect(url_for('csv_page', page=1))
     except Exception as e:
         flash(f"Error rendering CSV editor: {str(e)}")
         return redirect(url_for("home"))
+
 
 def render_raw_editor(s3_path):
     """Render raw editor for non-CSV files"""
@@ -3008,7 +3042,7 @@ def render_raw_editor(s3_path):
         # For now, return a simple raw editor
         # In a real implementation, you would read the file from S3
         sample_content = f"# Content from {s3_path}\n\nThis is a sample file content."
-        
+
         return render_template_string(
             RAW_EDIT_HTML,
             filename=s3_path.split('/')[-1],
@@ -3020,22 +3054,23 @@ def render_raw_editor(s3_path):
         flash(f"Error rendering raw editor: {str(e)}")
         return redirect(url_for("home"))
 
+
 @app.route('/download_csv', methods=['POST'])
 def download_csv():
     try:
         print(f"DEBUG: Download CSV form data: {dict(request.form)}")
         print(f"DEBUG: Session keys: {list(session.keys())}")
         print(f"DEBUG: CSV_DATA_CACHE keys: {list(CSV_DATA_CACHE.keys())}")
-        
+
         # Get cache key from session or form
         cache_key = request.form.get('cache_key') or session.get('cache_key')
         print(f"DEBUG: Cache key: {cache_key}")
-        
+
         if not cache_key:
             print("DEBUG: No cache key found")
             flash("No data available for download")
             return redirect(url_for('home'))
-        
+
         # Get data from cache
         cached_data = CSV_DATA_CACHE.get(cache_key)
         print(f"DEBUG: Cached data found: {cached_data is not None}")
@@ -3043,22 +3078,26 @@ def download_csv():
             print(f"DEBUG: Available cache keys: {list(CSV_DATA_CACHE.keys())}")
             flash("Data not found in cache")
             return redirect(url_for('home'))
-        
+
         data = cached_data['data']
         filename = cached_data.get('filename', 'modified_file.csv')
-        
+        # Ensure filename has no local labels and has .csv extension
+        filename = sanitize_download_filename(filename, default_ext='.csv')
+        if not filename.lower().endswith('.csv'):
+            filename = f"{filename}.csv"
+
         # Get edits from session
         edits = session.get(f'csv_edits_{cache_key}', {})
         print(f"DEBUG: Looking for edits with key: csv_edits_{cache_key}")
         print(f"DEBUG: Found {len(edits)} edits: {edits}")
-        
+
         # Apply edits to data
         for key, new_value in edits.items():
             try:
                 row_idx, col_idx = key.split(',')
                 row_idx = int(row_idx)
                 col_idx = int(col_idx)
-                
+
                 if row_idx < len(data) and col_idx < len(data[0]):
                     # Get column name from first row
                     columns = list(data[0].keys())
@@ -3067,23 +3106,23 @@ def download_csv():
                         data[row_idx][col_name] = new_value
             except (ValueError, IndexError, KeyError):
                 continue
-        
+
         # Get delimiter from form
         delimiter = request.form.get('delimiter', ',')
-        
+
         # Convert to CSV format with specified delimiter
         if data:
             import csv
             from io import StringIO
-            
+
             output = StringIO()
             writer = csv.DictWriter(output, fieldnames=data[0].keys(), delimiter=delimiter)
             writer.writeheader()
             writer.writerows(data)
-            
+
             csv_content = output.getvalue()
             output.close()
-            
+
             # Create response with CSV content
             from flask import Response
             response = Response(csv_content, mimetype='text/csv')
@@ -3092,32 +3131,50 @@ def download_csv():
         else:
             flash("No data to download")
             return redirect(url_for('home'))
-        
+
     except Exception as e:
         print(f"DEBUG: Download CSV error: {str(e)}")
         flash(f"Error downloading CSV: {str(e)}")
         return redirect(url_for('home'))
+
+
+@app.route('/download_raw', methods=['POST'])
+def download_raw():
+    """Download the current raw editor content as a file with the provided filename."""
+    try:
+        # Prefer explicit filename from form, else fall back to actual_file_path or generic
+        filename = request.form.get('filename') or request.form.get('actual_file_path') or 'workbench_file.txt'
+        code_text = request.form.get('code_text', '')
+
+        # Sanitize filename and ensure it has an extension (default .txt)
+        filename = sanitize_download_filename(filename)
+        if not os.path.splitext(filename)[1]:
+            filename = f"{filename}.txt"
+
+        from flask import Response
+        response = Response(code_text, mimetype='text/plain; charset=utf-8')
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        flash(f"Error downloading file: {str(e)}")
+        return redirect(url_for('home'))
+
 
 @app.route('/save_raw', methods=['POST'])
 def save_raw():
     try:
         # Get form data
         code_text = request.form.get('code_text', '')
-        
+
         # For now, just flash a success message
         # In a real implementation, you would save the content
         flash(f"Content saved successfully! Length: {len(code_text)} characters")
-        
+
         return redirect(url_for('home'))
-        
+
     except Exception as e:
         flash(f"Error saving content: {str(e)}")
         return redirect(url_for('home'))
-
-
-
-
-
 
 
 @app.route('/set-theme', methods=['POST'])
@@ -3131,8 +3188,6 @@ def set_theme():
         return jsonify({'error': str(e)})
 
 
-
-
 @app.route('/csv-edit', methods=['GET', 'POST'])
 @app.route('/csv-edit/<int:page>', methods=['GET'])
 def csv_page(page=1):
@@ -3141,7 +3196,7 @@ def csv_page(page=1):
         cache_key = session.get('csv_cache_key', '')
         # Try to get from session first, then default to localStorage value or 20
         per_page = int(session.get('csv_per_page', 20))
-        
+
         # Override from URL if provided (clean URLs)
         if request.method == 'GET':
             # Only override per_page if explicitly provided in URL, otherwise use session
@@ -3159,9 +3214,9 @@ def csv_page(page=1):
             if 'cache_key' in request.form:
                 cache_key = request.form['cache_key']
                 session['csv_cache_key'] = cache_key  # Update session
-        
+
         s3_path = request.form.get('s3_path', '') if request.method == 'POST' else ''
-        
+
         # Debug information
         print(f"DEBUG: Session cache_key: {session.get('csv_cache_key')}")
         print(f"DEBUG: Session per_page: {session.get('csv_per_page')}")
@@ -3169,28 +3224,28 @@ def csv_page(page=1):
         print(f"DEBUG: Final per_page: {per_page}")
         print(f"DEBUG: Cache keys available: {list(CSV_DATA_CACHE.keys())}")
         print(f"DEBUG: Using cache_key: {cache_key}")
-        
+
         # Get the stored CSV data from cache system (same as workbench.py)
         if not cache_key or cache_key not in CSV_DATA_CACHE:
             return jsonify({'error': 'No CSV data found in cache. Please reload the CSV file.'})
-        
+
         cached_data = CSV_DATA_CACHE[cache_key]
         data_full = cached_data['data']  # Use 'data' not 'dataframe'
-        
+
         # Use pagination count from session (user preference) instead of cache
         # per_page = cached_data.get('per_page', 20)  # Don't use cache value
-        
+
         # Debug information
         print(f"DEBUG: Cache keys: {list(CSV_DATA_CACHE.keys())}")
         print(f"DEBUG: Found data for cache_key: {cache_key}")
         print(f"DEBUG: Data length: {len(data_full)}")
         print(f"DEBUG: Request form data: {dict(request.form)}")
         print(f"DEBUG: Page: {page}, Per_page from cache: {per_page}")
-        
+
         # Calculate pagination
         total_rows = len(data_full)
         page_count = (total_rows + per_page - 1) // per_page
-        
+
         # Validate page number
         if page < 1:
             page = 1
@@ -3203,34 +3258,34 @@ def csv_page(page=1):
                     session['csv_cache_key'] = cache_key
                     session['csv_per_page'] = per_page
                 return redirect(url_for('csv_page', page=page))
-            
+
             # For GET requests, render the template
             return render_template_string(CSV_EDIT_HTML,
-                s3_path=s3_path,
-                module=module,
-                file_type=file_type,
-                gzipped=gzipped,
-                filename=filename,
-                columns=columns,
-                data=data,
-                clean_url=url_for('csv_page', page=page),
-                page=page,
-                per_page=per_page,
-                total_rows=total_rows,
-                page_count=page_count,
-                cache_key=cache_key,
-                escaped_delimiter=escaped_delimiter,
-                edits=edits,
-                edits_json=json.dumps(edits, default=str)
-            )
-        
+                                          s3_path=s3_path,
+                                          module=module,
+                                          file_type=file_type,
+                                          gzipped=gzipped,
+                                          filename=filename,
+                                          columns=columns,
+                                          data=data,
+                                          clean_url=url_for('csv_page', page=page),
+                                          page=page,
+                                          per_page=per_page,
+                                          total_rows=total_rows,
+                                          page_count=page_count,
+                                          cache_key=cache_key,
+                                          escaped_delimiter=escaped_delimiter,
+                                          edits=edits,
+                                          edits_json=json.dumps(edits, default=str)
+                                          )
+
         # Calculate start and end indices
         start = (page - 1) * per_page
         end = min(start + per_page, total_rows)
-        
+
         # Get the page data
         page_data = data_full[start:end]
-        
+
         # Get cached data details
         columns = cached_data.get('columns', [])
         public_url = cached_data.get('public_url', '')
@@ -3240,10 +3295,10 @@ def csv_page(page=1):
         filename = cached_data.get('filename', 'data.csv')
         detected_delimiter = cached_data.get('detected_delimiter', ',')
         escaped_delimiter = detected_delimiter.replace('\\', '\\\\').replace('"', '\\"')
-        
+
         # Get existing edits from session
         edits = session.get(f'csv_edits_{cache_key}', {})
-        
+
         # Render the CSV editor template
         return render_template_string(
             CSV_EDIT_HTML,
@@ -3269,10 +3324,9 @@ def csv_page(page=1):
             theme=session.get('theme', 'dark'),
             big_time_display=get_big_time_display()
         )
-        
+
     except Exception as e:
         return jsonify({'error': str(e)})
-
 
 
 @app.route('/update-pagination', methods=['POST'])
@@ -3281,25 +3335,26 @@ def update_pagination():
     try:
         cache_key = request.form.get('cache_key', '')
         new_per_page = int(request.form.get('per_page', 20))
-        
+
         print(f"DEBUG: update-pagination called with cache_key: {cache_key}, new_per_page: {new_per_page}")
         print(f"DEBUG: Available cache keys: {list(CSV_DATA_CACHE.keys())}")
-        
+
         if not cache_key or cache_key not in CSV_DATA_CACHE:
             print(f"DEBUG: Cache key not found: {cache_key}")
             return jsonify({'error': 'No CSV data found in cache'})
-        
+
         # Update the pagination count in cache
         CSV_DATA_CACHE[cache_key]['per_page'] = new_per_page
-        
+
         print(f"DEBUG: Updated pagination for {cache_key} to {new_per_page}")
         print(f"DEBUG: Cache data now: {CSV_DATA_CACHE[cache_key]}")
-        
+
         return jsonify({'success': True, 'per_page': new_per_page})
-        
+
     except Exception as e:
         print(f"DEBUG: Error in update-pagination: {str(e)}")
         return jsonify({'error': str(e)})
+
 
 @app.route('/save-settings', methods=['POST'])
 def save_settings():
@@ -3308,18 +3363,19 @@ def save_settings():
         data = request.get_json()
         pagination_count = data.get('pagination_count', 20)
         url_input = data.get('url_input', '')
-        
+
         # Save to session memory
         session['pagination_count'] = pagination_count
         session['url_input'] = url_input
-        
+
         print(f"DEBUG: Settings saved - pagination: {pagination_count}, URL: {url_input}")
-        
+
         return jsonify({'success': True, 'pagination_count': pagination_count, 'url_input': url_input})
-        
+
     except Exception as e:
         print(f"DEBUG: Error saving settings: {str(e)}")
         return jsonify({'error': str(e)})
+
 
 @app.route('/get-settings', methods=['GET'])
 def get_settings():
@@ -3327,18 +3383,19 @@ def get_settings():
     try:
         pagination_count = session.get('pagination_count', 20)
         url_input = session.get('url_input', '')
-        
+
         print(f"DEBUG: Settings retrieved - pagination: {pagination_count}, URL: {url_input}")
-        
+
         return jsonify({
-            'success': True, 
-            'pagination_count': pagination_count, 
+            'success': True,
+            'pagination_count': pagination_count,
             'url_input': url_input
         })
-        
+
     except Exception as e:
         print(f"DEBUG: Error getting settings: {str(e)}")
         return jsonify({'error': str(e)})
+
 
 @app.route('/update-csv-edit', methods=['POST'])
 def update_csv_edit():
@@ -3346,23 +3403,24 @@ def update_csv_edit():
         data = request.get_json()
         cache_key = data.get('cache_key')
         edits = data.get('edits', {})
-        
+
         print(f"DEBUG: Update CSV edit - cache_key: {cache_key}, edits: {edits}")
-        
+
         if not cache_key:
             return jsonify({'success': False, 'error': 'No cache key provided'})
-        
+
         # Store all edits in session
         edits_key = f'csv_edits_{cache_key}'
         session[edits_key] = edits
-        
+
         print(f"DEBUG: Saved {len(edits)} edits to session key {edits_key}")
-        
+
         return jsonify({'success': True})
-        
+
     except Exception as e:
         print(f"DEBUG: Error updating CSV edit: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
+
 
 @app.route('/save', methods=['POST'])
 def save():
@@ -3371,44 +3429,46 @@ def save():
         s3_path = request.form.get('s3_path', '')
         table_data = request.form.get('table_data', '')
         all_edits = request.form.get('all_edits', '')
-        
+
         # For now, just flash a success message
         # In a real implementation, you would save the CSV data
         flash(f"CSV saved successfully to {s3_path}")
-        
+
         return redirect(url_for('home'))
-        
+
     except Exception as e:
         flash(f"Error saving CSV: {str(e)}")
         return redirect(url_for('home'))
+
 
 @app.route('/execute_command', methods=['POST'])
 def execute_command():
     try:
         data = request.get_json()
         command = data.get('command', '')
-        
+
         if not command:
             return jsonify({'error': 'No command provided'})
-        
+
         # Execute command using subprocess
         import subprocess
         import shlex
-        
+
         # Split command into arguments safely
         args = shlex.split(command)
-        
+
         # Execute command
         result = subprocess.run(args, capture_output=True, text=True, timeout=30)
-        
+
         return jsonify({'output': result.stdout, 'stderr': result.stderr, 'returncode': result.returncode})
-        
+
     except subprocess.TimeoutExpired:
         return jsonify({'error': 'Command timed out'})
     except FileNotFoundError:
         return jsonify({'error': f'Command not found: {command.split()[0]}'})
     except Exception as e:
         return jsonify({'error': str(e)})
+
 
 @app.route('/csv-editor')
 def csv_editor_route():
@@ -3437,6 +3497,7 @@ def csv_editor_route():
         file_type="csv"
     )
 
+
 @app.route('/raw-editor')
 def raw_editor_route():
     """Direct route to raw editor"""
@@ -3448,10 +3509,16 @@ def raw_editor_route():
         big_time_display=get_big_time_display()
     )
 
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9000"))
-    try:
-        webbrowser.open(f"http://localhost:{port}")
-    except Exception:
-        pass
-    app.run(debug=True, port=port, use_reloader=True)
+    debug = os.environ.get("FLASK_ENV", "development") == "development"
+
+    # Only open browser in local development
+    if debug and port != int(os.environ.get("PORT", "9000")):
+        try:
+            webbrowser.open(f"http://localhost:{port}")
+        except Exception:
+            pass
+
+    app.run(debug=debug, host="0.0.0.0", port=port, use_reloader=debug)
