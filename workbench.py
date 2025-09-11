@@ -5195,8 +5195,16 @@ CSV_EDIT_HTML = r"""
             <!-- Empty flex space when no pagination -->
             <div class="flex-1"></div>
             {% endif %}
-            <!-- Back button (always visible) -->
+            <!-- Small Download + Back buttons (always visible) -->
             <div class="flex items-center">
+               <!-- Small Download button -->
+               <form method="post" action="{{ url_for('download') }}" class="inline-block" style="margin-right: 6px;">
+                  <input type="hidden" name="path" value="{{ s3_path }}" />
+                  <input type="hidden" name="module" value="{{ module }}" />
+                  <input type="hidden" name="download_count" value="All" />
+                  <button type="submit" class="btn btn-ghost btn-icon" title="Download" style="height: 46px; width: 46px;">⬇</button>
+               </form>
+               <!-- Back button -->
                <a
                   href="{{ url_for('home') }}"
                   class="btn btn-ghost btn-icon"
@@ -6640,7 +6648,7 @@ JSON_EDIT_HTML = r"""
 
          // Store cache key for tracking changes
          const cacheKey = '{{ cache_key }}';
-         let recordIndex = {{ current_record }};
+         const recordIndex = {{ current_record }};
          const totalEdits = {{ total_edits | default(0) }};
 
          // Track edits locally - initialize with any existing edits for this record
@@ -7266,40 +7274,11 @@ JSON_EDIT_HTML = r"""
          const actionInput = form.querySelector('input[name="action"]');
 
          if (actionInput && actionInput.value === 'view_json') {
-         // Intercept JSON pagination and fetch next record from server cache without full reload
-         e.preventDefault();
+         // This is a pagination form - validate before allowing navigation
          if (!validateAllFields()) {
-           return false;
+          e.preventDefault();
+          return false;
          }
-         const recInput = form.querySelector('input[name="record"]');
-         const targetIndex = parseInt((recInput && recInput.value) || '0', 10) || 0;
-         // Fetch record from server cache
-         fetch('/json-record', {
-           method: 'POST',
-           headers: { 'Content-Type': 'application/json' },
-           body: JSON.stringify({ cache_key: cacheKey, record: targetIndex })
-         }).then(r => r.json()).then(data => {
-           if (!data || !data.success) { form.submit(); return; }
-           // Update in-memory data and re-render editor
-           jsonData = data.record;
-           // Load edits for this record so edited highlights persist
-           jsonEdits = data.record_edits || {};
-           const container = document.getElementById('json-editor');
-           if (container) { container.innerHTML = ''; const editorEl = createEditor(jsonData); container.appendChild(editorEl); }
-           // Update hidden current_record
-           const currInput = document.querySelector('input[name="current_record"]');
-           if (currInput) currInput.value = targetIndex;
-           // Update in-memory record index for subsequent edit tracking
-           recordIndex = targetIndex;
-           // Update record info text (left side)
-           const recInfo = document.querySelector('.record-info');
-           if (recInfo) {
-             const total = data.total || parseInt(document.querySelector('input[name="total_records"]')?.value || '0', 10) || 0;
-             recInfo.innerHTML = `<span class=\"font-bold text-gray-800\">${targetIndex + 1}</span>&nbsp;of&nbsp;<span class=\"font-bold text-gray-800\">${total}</span>`;
-           }
-           try { updateEditCount(); } catch(e) {}
-         }).catch(() => { form.submit(); });
-         return false;
          }
          }, true); // Use capture phase to intercept before other handlers
 
@@ -10924,6 +10903,186 @@ def home():
         try:
             server_log("Edit Request", S3_Path=s3_path, Module_Selected=module)
         except Exception:
+            pass
+
+        # FAST-PATH: If this is pagination/navigation and data is already cached, avoid re-reading from S3
+        try:
+            file_type_form = (request.form.get("file_type") or "").strip().lower()
+            cache_key_form = cache_key
+            # JSON navigation via form fallback (AJAX usually handles this). Use cache only.
+            if action == "view_json" and cache_key_form in JSON_DATA_CACHE:
+                data_list, json_format = JSON_DATA_CACHE[cache_key_form]
+                record = 0
+                try:
+                    record = int(request.form.get("record", 0) or 0)
+                except Exception:
+                    record = 0
+                total = len(data_list)
+                if total == 0:
+                    current_data = {}
+                else:
+                    record = max(0, min(total - 1, record))
+                    current_data = data_list[record]
+
+                # Apply cached edits for this record if any
+                record_edits = {}
+                if cache_key_form in JSON_EDITS_CACHE and record in JSON_EDITS_CACHE[cache_key_form]:
+                    record_edits = JSON_EDITS_CACHE[cache_key_form][record]
+                    try:
+                        current_data = apply_cached_edits_to_record(current_data.copy(), record_edits)
+                    except Exception:
+                        pass
+
+                # Pagination visibility and total edits
+                show_pagination = (len(data_list) > 1) or (json_format == "jsonl")
+                total_edits = 0
+                if cache_key_form in JSON_EDITS_CACHE:
+                    for _rec_edits in JSON_EDITS_CACHE[cache_key_form].values():
+                        total_edits += len(_rec_edits)
+
+                # For local files, show a placeholder S3 path
+                display_s3_path = s3_path
+                if upload_id and not (s3_path or "").lower().startswith('s3://'):
+                    display_s3_path = f"s3://bucket/path/{s3_path}"
+
+                return render_template_string(
+                    JSON_EDIT_HTML,
+                    logo=LOGO_URL,
+                    s3_path=display_s3_path,
+                    module=module,
+                    decryption_module=decryption_module,
+                    gzipped=gz_flag,
+                    is_jsonl=(json_format == "jsonl"),
+                    is_json_object=(json_format == "json-object"),
+                    json_type=json_format,
+                    show_pagination=show_pagination,
+                    current_record=record,
+                    total_records=len(data_list),
+                    json_data_str=json.dumps(current_data),
+                    cache_key=cache_key_form,
+                    record_index=record,
+                    total_edits=total_edits,
+                    record_edits=record_edits,
+                    theme=session.get('theme', 'dark'),
+                    env=env,
+                    big_time_display=get_big_time_display(),
+                    s3_browser_modal=render_s3_browser_modal(env),
+                    s3_browser_styles=S3_BROWSER_STYLES,
+                    s3_browser_script=S3_BROWSER_SCRIPT,
+                )
+
+            # CSV pagination navigation - use cache to avoid re-reading content
+            if file_type_form == "csv" and cache_key_form in CSV_DATA_CACHE:
+                # Use cached data
+                cached_data = CSV_DATA_CACHE[cache_key_form]
+                df_full = cached_data['dataframe'].copy()  # Work with a copy
+                delim = cached_data['delimiter']
+                escaped = f"\\u{ord(delim):04x}" if delim and ord(delim) < 32 else (delim or ",")
+                edits = CSV_EDITS_CACHE.get(cache_key_form, {})
+
+                # Create a display copy for sorting and editing
+                df_display = df_full.copy()
+
+                # Sort the display copy by first column (stable and string-sort)
+                if len(df_display.columns) > 0:
+                    first_col = df_display.columns[0]
+                    df_display = df_display.sort_values(
+                        by=first_col, key=lambda col: col.astype(str), ignore_index=True
+                    )
+
+                # Apply edits to the sorted display DataFrame
+                applied_edits = 0
+                for edit_key, value in edits.items():
+                    try:
+                        row_idx, col_idx = map(int, edit_key.split(','))
+                        if row_idx < len(df_display) and col_idx < len(df_display.columns):
+                            col_name = df_display.columns[col_idx]
+                            _old = df_display.iloc[row_idx, col_idx]
+                            df_display.iloc[row_idx, col_idx] = value
+                            applied_edits += 1
+                    except Exception:
+                        pass
+
+                # Paginate (use display DataFrame which is sorted and has edits applied)
+                try:
+                    page = int(request.form.get("page", 1))
+                except Exception:
+                    page = 1
+                try:
+                    per_page = int(request.form.get("records_per_page", request.form.get("recordsPerPage", 40)))
+                except Exception:
+                    per_page = 40
+                total_rows = len(df_display)
+                page_count = max(1, math.ceil(total_rows / per_page))
+                page = max(1, min(page, page_count))
+
+                start = (page - 1) * per_page
+                end = start + per_page
+                df_page = df_display.iloc[start:end]
+                start_rec = start + 1
+                end_rec = min(end, total_rows)
+
+                # Convert to list of dicts to preserve column order
+                data_as_lists = []
+                columns = list(df_display.columns)
+                for _idx, _row in df_page.iterrows():
+                    row_data = {}
+                    for _col in columns:
+                        row_data[_col] = _row[_col]
+                    data_as_lists.append(row_data)
+
+                # For local files being edited as CSV, show a placeholder S3 path
+                display_s3_path = s3_path
+                if upload_id and not (s3_path or "").lower().startswith('s3://'):
+                    display_s3_path = f"s3://bucket/path/{s3_path}"
+
+                try:
+                    server_log(
+                        "CSV Editor Ready (Fast-Path)",
+                        S3_Path=display_s3_path,
+                        Module_Selected=module,
+                        Total_Records=total_rows,
+                        Records_Per_Page=per_page,
+                        Pages=page_count,
+                        Showing=f"{start_rec}-{end_rec}",
+                        Delimiter=escaped,
+                        Cache_Dir=S3_CACHE_DIR,
+                        Cache_Key=cache_key_form[:50] + "..." if len(cache_key_form) > 50 else cache_key_form,
+                    )
+                except Exception:
+                    pass
+
+                return render_template_string(
+                    CSV_EDIT_HTML,
+                    logo=LOGO_URL,
+                    upload_id=upload_id,
+                    s3_path=display_s3_path,
+                    module=module,
+                    decryption_module=decryption_module,
+                    file_type="csv",
+                    gzipped=gz_flag,
+                    columns=columns,
+                    data=data_as_lists,
+                    escaped_delimiter=escaped,
+                    page=page,
+                    page_count=page_count,
+                    per_page=per_page,
+                    start_rec=start_rec,
+                    end_rec=end_rec,
+                    total_rows=total_rows,
+                    cache_key=cache_key_form,
+                    edits=edits,
+                    edits_json=json.dumps(edits),
+                    start=start,
+                    theme=session.get('theme', 'dark'),
+                    env=env,
+                    big_time_display=get_big_time_display(),
+                    s3_browser_modal=render_s3_browser_modal(env),
+                    s3_browser_styles=S3_BROWSER_STYLES,
+                    s3_browser_script=S3_BROWSER_SCRIPT,
+                )
+        except Exception:
+            # If the fast-path fails for any reason, fall back to original flow
             pass
 
         # 4) Read raw bytes and get metadata in TRUE PARALLEL (optimized)
